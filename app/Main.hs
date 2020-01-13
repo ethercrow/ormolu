@@ -1,7 +1,9 @@
 {-# LANGUAGE CPP             #-}
+{-# language OverloadedStrings #-}
 {-# LANGUAGE LambdaCase      #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Main (main) where
 
@@ -17,17 +19,27 @@ import Paths_ormolu (version)
 import System.Exit (ExitCode (..), exitWith)
 import System.IO (hPutStrLn, stderr)
 import qualified Data.Text.IO as TIO
+import OpenTelemetry.Common
+import OpenTelemetry.FileExporter
+import OpenTelemetry.Implicit
 
 -- | Entry point of the program.
 
 main :: IO ()
-main = withPrettyOrmoluExceptions $ do
-  Opts {..} <- execParser optsParserInfo
-  let formatOne' = formatOne optMode optConfig
-  case optInputFiles of
-    [] -> formatOne' Nothing
-    ["-"] -> formatOne' Nothing
-    xs -> mapM_ (formatOne' . Just) xs
+main = do
+  exporter <- createFileSpanExporter "helloworld.json"
+  let otConfig =
+        OpenTelemetryConfig
+          { otcSpanExporter = exporter
+          }
+  withOpenTelemetry otConfig . withPrettyOrmoluExceptions $ withSpan "main" $ do
+    setTag "version" (showVersion version)
+    Opts {..} <- withSpan "parse options" $ execParser optsParserInfo
+    let formatOne' = formatOne optMode optConfig
+    case optInputFiles of
+      [] -> formatOne' Nothing
+      ["-"] -> formatOne' Nothing
+      xs -> mapM_ (formatOne' . Just) xs
 
 -- | Format a single input.
 
@@ -36,8 +48,9 @@ formatOne
   -> Config                     -- ^ Configuration
   -> Maybe FilePath             -- ^ File to format or stdin as 'Nothing'
   -> IO ()
-formatOne mode config = \case
+formatOne mode config mfp = withSpan "formatOne" $ case mfp of
   Nothing -> do
+    setTag @String "input" "stdin"
     r <- ormoluStdin config
     case mode of
       Stdout -> TIO.putStr r
@@ -47,6 +60,7 @@ formatOne mode config = \case
           -- 101 is different from all the other exit codes we already use.
         exitWith (ExitFailure 101)
   Just inputFile -> do
+    setTag "input" inputFile
     r <- ormoluFile config inputFile
     case mode of
       Stdout ->

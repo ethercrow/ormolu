@@ -24,6 +24,7 @@ import GHC.LanguageExtensions.Type (Extension (..))
 import qualified HeaderInfo as GHC
 import qualified HscTypes as GHC
 import qualified Lexer as GHC
+import OpenTelemetry.Implicit
 import Ormolu.Config
 import Ormolu.Exception
 import Ormolu.Parser.Anns
@@ -206,8 +207,9 @@ parsePragmasIntoDynFlags ::
   -- | Input for parser
   String ->
   IO (Either String ([GHC.Warn], DynFlags))
-parsePragmasIntoDynFlags flags extraOpts filepath str =
-  catchErrors $ do
+parsePragmasIntoDynFlags flags extraOpts filepath str = withSpan "parsePragmasIntoDynFlags"
+  $ catchErrors
+  $ do
     let opts = GHC.getOptions flags (GHC.stringToStringBuffer str) filepath
     (flags', leftovers, warnings) <-
       parseDynamicFilePragma flags (opts <> extraOpts)

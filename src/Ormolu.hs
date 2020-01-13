@@ -16,10 +16,12 @@ where
 import qualified CmdLineParser as GHC
 import Control.Exception
 import Control.Monad
+import Control.Monad.Catch
 import Control.Monad.IO.Class (MonadIO (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Debug.Trace
+import OpenTelemetry.Implicit
 import Ormolu.Config
 import Ormolu.Diff
 import Ormolu.Exception
@@ -40,7 +42,7 @@ import qualified SrcLoc as GHC
 --     * Takes file name just to use it in parse error messages.
 --     * Throws 'OrmoluException'.
 ormolu ::
-  MonadIO m =>
+  (MonadMask m, MonadIO m) =>
   -- | Ormolu configuration
   Config ->
   -- | Location of source file
@@ -48,9 +50,10 @@ ormolu ::
   -- | Input to format
   String ->
   m Text
-ormolu cfg path str = do
+ormolu cfg path str = withSpan "ormolu" $ do
   (warnings, result0) <-
-    parseModule' cfg OrmoluParsingFailed path str
+    withSpan "parse input" $
+      parseModule' cfg OrmoluParsingFailed path str
   when (cfgDebug cfg) $ do
     traceM "warnings:\n"
     traceM (concatMap showWarn warnings)
@@ -65,11 +68,12 @@ ormolu cfg path str = do
     -- Parse the result of pretty-printing again and make sure that AST
     -- is the same as AST of original snippet module span positions.
     (_, result1) <-
-      parseModule'
-        cfg
-        OrmoluOutputParsingFailed
-        pathRendered
-        (T.unpack txt)
+      withSpan "parse result" $
+        parseModule'
+          cfg
+          OrmoluOutputParsingFailed
+          pathRendered
+          (T.unpack txt)
     unless (cfgUnsafe cfg) $
       case diffParseResult result0 result1 of
         Same -> return ()
@@ -91,7 +95,7 @@ ormolu cfg path str = do
 -- > ormoluFile cfg path =
 -- >   liftIO (readFile path) >>= ormolu cfg path
 ormoluFile ::
-  MonadIO m =>
+  (MonadMask m, MonadIO m) =>
   -- | Ormolu configuration
   Config ->
   -- | Location of source file
@@ -99,27 +103,27 @@ ormoluFile ::
   -- | Resulting rendition
   m Text
 ormoluFile cfg path =
-  liftIO (readFile path) >>= ormolu cfg path
+  liftIO (withSpan "readFile" (readFile path)) >>= ormolu cfg path
 
 -- | Read input from stdin and format it.
 --
 -- > ormoluStdin cfg =
 -- >   liftIO (hGetContents stdin) >>= ormolu cfg "<stdin>"
 ormoluStdin ::
-  MonadIO m =>
+  (MonadMask m, MonadIO m) =>
   -- | Ormolu configuration
   Config ->
   -- | Resulting rendition
   m Text
 ormoluStdin cfg =
-  liftIO getContents >>= ormolu cfg "<stdin>"
+  liftIO (withSpan "getContents" getContents) >>= ormolu cfg "<stdin>"
 
 ----------------------------------------------------------------------------
 -- Helpers
 
 -- | A wrapper around 'parseModule'.
 parseModule' ::
-  MonadIO m =>
+  (MonadMask m, MonadIO m) =>
   -- | Ormolu configuration
   Config ->
   -- | How to obtain 'OrmoluException' to throw when parsing fails
